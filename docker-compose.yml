@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: library_db
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: rootpassword
+      POSTGRES_DB: library_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      # Скрипт выполнится автоматически при первом поднятии контейнера
+      - ./backend/models/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  backend:
+    build: ./backend
+    container_name: library_backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    environment:
+      - DATABASE_URL=postgresql://admin:rootpassword@db:5432/library_db
+
+  worker:
+    build: ./backend
+    container_name: library_worker
+    depends_on:
+      - db
+    environment:
+      - DATABASE_URL=postgresql://admin:rootpassword@db:5432/library_db
+    # Переопределяем команду запуска: вместо FastAPI запускаем скрипт воркера
+    command: [ "python", "services/worker.py" ]
+
+  frontend:
+    build: ./frontend
+    container_name: library_frontend
+    ports:
+      - "3000:8080"
+    depends_on:
+      - backend
+
+volumes:
+  pg_data:
