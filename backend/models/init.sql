@@ -3,12 +3,14 @@ CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(100) NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
+    phone_number VARCHAR(20) UNIQUE, -- <--- ДОБАВИЛИ НОВУЮ КОЛОНКУ
     password_hash VARCHAR(255) NOT NULL,
     library_card VARCHAR(20) UNIQUE,
     role VARCHAR(20) DEFAULT 'reader',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Таблицу analysis_jobs оставляем без изменений
 -- Таблица очереди задач
 CREATE TABLE analysis_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
