@@ -44,5 +44,10 @@ class DatabaseHandler:
         async with self.pool.acquire() as connection:
             return await connection.execute(query, *args)
 
+    async def fetch_all(self, query: str, *args):
+        """Выполняет запрос и возвращает список строк (удобно для поиска)"""
+        async with self.pool.acquire() as connection:
+            return await connection.fetch(query, *args)
+
 # Создаем глобальный экземпляр (синглтон) для использования во всем проекте
 db_handler = DatabaseHandler()

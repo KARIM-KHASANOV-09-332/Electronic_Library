@@ -8,8 +8,8 @@ class UserCreate(BaseModel):
     email: EmailStr
     phone_number: str = Field(..., description="Номер телефона")
     password: str = Field(..., min_length=8)
-    # НОВОЕ: Опциональное поле для существующего билета
     library_card: Optional[str] = Field(None, description="Существующий номер билета")
+    role: str = Field(default="reader", description="Роль: reader или author")  # НОВОЕ ПОЛЕ
 
     @field_validator('phone_number')
     @classmethod
