@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:15-alpine
@@ -25,7 +23,11 @@ services:
     environment:
       - DATABASE_URL=postgresql://admin:rootpassword@db:5432/library_db
     volumes:
+      - ./backend:/app
       - ./backend/uploads:/app/uploads
+      - ./tests:/app/tests:ro
+      - ./frontend:/app/frontend:ro
+      - ./docker-compose.yml:/app/docker-compose.yml:ro
 
   worker:
     build: ./backend
@@ -34,6 +36,9 @@ services:
       - db
     environment:
       - DATABASE_URL=postgresql://admin:rootpassword@db:5432/library_db
+    volumes:
+      - ./backend:/app
+      - ./backend/uploads:/app/uploads
     # Переопределяем команду запуска: вместо FastAPI запускаем скрипт воркера
     command: [ "python", "services/worker.py" ]
 

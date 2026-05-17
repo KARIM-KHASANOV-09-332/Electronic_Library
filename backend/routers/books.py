@@ -17,7 +17,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/books", tags=["Книги"])
 
-UPLOAD_DIR = Path("uploads/books")
+UPLOAD_DIR = Path(__file__).resolve().parents[1] / "uploads" / "books"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 PUBLIC_BOOK_STATUS = "published"
