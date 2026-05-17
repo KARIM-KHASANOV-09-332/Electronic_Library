@@ -24,6 +24,8 @@ services:
       - db
     environment:
       - DATABASE_URL=postgresql://admin:rootpassword@db:5432/library_db
+    volumes:
+      - ./backend/uploads:/app/uploads
 
   worker:
     build: ./backend

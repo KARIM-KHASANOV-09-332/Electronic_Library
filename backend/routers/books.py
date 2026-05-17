@@ -99,6 +99,31 @@ def bookmark_to_dict(row):
     }
 
 
+async def get_book_file_or_404(book_id: str):
+    file_row = await db_handler.fetch_row(
+        """
+        SELECT id, file_type, file_path, original_filename
+        FROM book_files
+        WHERE book_id = $1::uuid
+        ORDER BY created_at ASC
+        LIMIT 1;
+        """,
+        book_id,
+    )
+    if not file_row:
+        raise HTTPException(status_code=404, detail="Book file not found")
+
+    file_path = Path(file_row["file_path"])
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Stored book file is missing")
+
+    media_type = "application/pdf"
+    if file_row["file_type"] == "epub":
+        media_type = "application/epub+zip"
+
+    return file_row, file_path, media_type
+
+
 @router.post("/moderator/direct")
 async def create_book_direct(payload: BookDirectCreate):
     try:
@@ -604,6 +629,31 @@ async def get_moderation_queue():
         raise HTTPException(status_code=500, detail="Не удалось получить очередь модерации")
 
 
+@router.get("/moderation/{book_id}/file")
+async def preview_moderation_file(book_id: str, moderator_user_id: str = Query(...)):
+    try:
+        moderator = await get_user_or_404(moderator_user_id)
+        if moderator["role"] not in ("moderator", "admin"):
+            raise HTTPException(status_code=403, detail="Only moderators can preview files")
+
+        book = await get_book_or_404(book_id)
+        if book["status"] not in ("pending_review", "rejected", "published"):
+            raise HTTPException(status_code=400, detail="Book file is not available for moderation preview")
+
+        file_row, file_path, media_type = await get_book_file_or_404(book_id)
+        return FileResponse(
+            path=file_path,
+            media_type=media_type,
+            filename=file_row["original_filename"],
+            content_disposition_type="inline",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Moderation file preview error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to open moderation file")
+
+
 @router.post("/{book_id}/borrow")
 async def borrow_book(book_id: str, payload: UserBookAction):
     try:
@@ -783,9 +833,29 @@ async def read_book(book_id: str, user_id: str = Query(...)):
         await get_user_or_404(user_id)
         await ensure_active_loan(user_id, book_id)
 
+        file_row, file_path, media_type = await get_book_file_or_404(book_id)
+        return FileResponse(
+            path=file_path,
+            media_type=media_type,
+            filename=file_row["original_filename"],
+            content_disposition_type="inline",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Read book error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to open book file")
+
+
+@router.get("/{book_id}/file-status")
+async def get_reader_file_status(book_id: str, user_id: str = Query(...)):
+    try:
+        await get_user_or_404(user_id)
+        await ensure_active_loan(user_id, book_id)
+
         file_row = await db_handler.fetch_row(
             """
-            SELECT id, file_type, file_path, original_filename
+            SELECT file_type, file_path, original_filename
             FROM book_files
             WHERE book_id = $1::uuid
             ORDER BY created_at ASC
@@ -794,26 +864,50 @@ async def read_book(book_id: str, user_id: str = Query(...)):
             book_id,
         )
         if not file_row:
-            raise HTTPException(status_code=404, detail="Book file not found")
+            return {
+                "available": False,
+                "reason": "У этой книги нет прикрепленного файла.",
+            }
 
         file_path = Path(file_row["file_path"])
         if not file_path.exists():
-            raise HTTPException(status_code=404, detail="Stored book file is missing")
+            return {
+                "available": False,
+                "reason": "Файл книги отсутствует на сервере. Скорее всего, книга была загружена до настройки постоянного хранилища. Загрузите книгу заново.",
+                "original_filename": file_row["original_filename"],
+                "file_type": file_row["file_type"],
+            }
 
-        media_type = "application/pdf"
-        if file_row["file_type"] == "epub":
-            media_type = "application/epub+zip"
+        return {
+            "available": True,
+            "original_filename": file_row["original_filename"],
+            "file_type": file_row["file_type"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Reader file status error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to check book file")
 
+
+@router.get("/{book_id}/download")
+async def download_book(book_id: str, user_id: str = Query(...)):
+    try:
+        await get_user_or_404(user_id)
+        await ensure_active_loan(user_id, book_id)
+
+        file_row, file_path, media_type = await get_book_file_or_404(book_id)
         return FileResponse(
             path=file_path,
             media_type=media_type,
             filename=file_row["original_filename"],
+            content_disposition_type="attachment",
         )
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Read book error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to open book file")
+        logger.error(f"Download book error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to download book")
 
 
 @router.post("/{book_id}/bookmarks")

@@ -353,11 +353,8 @@ def reader_dashboard():
                                         )
 
                                     with ui.row().classes("gap-2"):
-                                        read_url = (
-                                            f"{BROWSER_API_BASE}/api/books/{loan['book_id']}/read"
-                                            f"?user_id={quote(user['id'])}"
-                                        )
-                                        ui.button("Читать", icon="chrome_reader_mode", on_click=lambda url=read_url: ui.open(url)).classes(
+                                        reader_url = f"/reader/{loan['book_id']}"
+                                        ui.button("Читать", icon="chrome_reader_mode", on_click=lambda url=reader_url: ui.open(url)).classes(
                                             "bg-blue-700 text-white"
                                         )
 
@@ -454,21 +451,190 @@ def reader_dashboard():
                                             "text-sm text-slate-700"
                                         )
 
-                                    async def delete(bookmark_id=bookmark["id"]):
-                                        response = await api_delete(
-                                            f"/api/books/bookmarks/{bookmark_id}",
-                                            params={"user_id": user["id"]},
+                                    with ui.row().classes("gap-2"):
+                                        bookmark_page = bookmark.get("page_number") or 1
+                                        reader_url = f"/reader/{bookmark['book_id']}/{bookmark_page}"
+                                        ui.button("Открыть", icon="open_in_new", on_click=lambda url=reader_url: ui.open(url)).classes(
+                                            "bg-blue-700 text-white"
                                         )
-                                        if response.status_code == 200:
-                                            ui.notify("Закладка удалена", type="positive")
-                                            await load_bookmarks()
-                                        else:
-                                            ui.notify(detail_from(response, "Не удалось удалить закладку"), type="negative")
 
-                                    ui.button(icon="delete", on_click=delete).props("round").classes("bg-red-600 text-white")
+                                        async def delete(bookmark_id=bookmark["id"]):
+                                            response = await api_delete(
+                                                f"/api/books/bookmarks/{bookmark_id}",
+                                                params={"user_id": user["id"]},
+                                            )
+                                            if response.status_code == 200:
+                                                ui.notify("Закладка удалена", type="positive")
+                                                await load_bookmarks()
+                                            else:
+                                                ui.notify(detail_from(response, "Не удалось удалить закладку"), type="negative")
+
+                                        ui.button(icon="delete", on_click=delete).props("round").classes("bg-red-600 text-white")
 
                 ui.button("Обновить закладки", icon="refresh", on_click=load_bookmarks).classes("mb-3")
                 ui.timer(0.5, load_bookmarks, once=True)
+
+
+@ui.page("/reader/{book_id}")
+@ui.page("/reader/{book_id}/{initial_page}")
+def book_reader_page(book_id: str, initial_page: int = 1):
+    user = require_login()
+    if not user:
+        return
+
+    try:
+        initial_page = max(1, int(initial_page))
+    except ValueError:
+        initial_page = 1
+
+    with page_shell("Чтение книги"):
+        with ui.row().classes("w-full items-center justify-between gap-3"):
+            with ui.column().classes("gap-0"):
+                ui.label("Встроенное чтение").classes("text-2xl font-bold")
+                ui.label("Для PDF работает переход по страницам. EPUB можно открыть или скачать файлом.").classes(
+                    "text-sm text-slate-500"
+                )
+            ui.button("Назад к моим книгам", icon="arrow_back", on_click=lambda: ui.open("/dashboard")).props("flat")
+
+        with ui.card().classes("w-full p-0 rounded-lg border border-slate-200 shadow-sm overflow-hidden"):
+            with ui.row().classes("w-full items-center justify-between gap-3 bg-slate-900 text-white px-4 py-3"):
+                with ui.row().classes("items-center gap-2"):
+                    ui.icon("chrome_reader_mode").classes("text-2xl")
+                    ui.label("Окно чтения").classes("text-lg font-bold")
+                ui.label("PDF: переход по номеру страницы. EPUB: просмотр зависит от браузера.").classes(
+                    "text-sm text-slate-300"
+                )
+
+            with ui.row().classes("w-full items-end gap-3 px-4 pt-4"):
+                page_input = ui.number("Страница", value=initial_page, min=1, step=1).classes("w-40")
+                note_input = ui.input("Заметка к закладке").classes("flex-1")
+                download_url = f"{BROWSER_API_BASE}/api/books/{book_id}/download?user_id={quote(user['id'])}"
+
+                def current_page() -> int:
+                    try:
+                        return max(1, int(page_input.value or 1))
+                    except (TypeError, ValueError):
+                        return 1
+
+                def file_url(page: int | None = None) -> str:
+                    url = f"{BROWSER_API_BASE}/api/books/{book_id}/read?user_id={quote(user['id'])}"
+                    if page:
+                        url = f"{url}#page={page}"
+                    return url
+
+                async def save_bookmark():
+                    page = current_page()
+                    response = await api_post(
+                        f"/api/books/{book_id}/bookmarks",
+                        {
+                            "user_id": user["id"],
+                            "page_number": page,
+                            "position_label": f"Страница {page}",
+                            "progress_percent": None,
+                            "note": note_input.value or "",
+                        },
+                    )
+                    if response.status_code == 200:
+                        ui.notify(f"Закладка на странице {page} сохранена", type="positive")
+                        await load_reader_bookmarks()
+                    else:
+                        ui.notify(detail_from(response, "Не удалось сохранить закладку"), type="negative")
+
+                ui.button("Перейти", icon="near_me", on_click=lambda: ui.timer(0.1, render_viewer, once=True)).classes(
+                    "bg-blue-700 text-white"
+                )
+                ui.button("Сохранить закладку", icon="bookmark_add", on_click=save_bookmark).classes(
+                    "bg-amber-700 text-white"
+                )
+                ui.button("Скачать", icon="download", on_click=lambda: ui.open(download_url)).classes(
+                    "bg-slate-700 text-white"
+                )
+
+            viewer_container = ui.column().classes("w-full p-4")
+
+            async def render_viewer():
+                page = current_page()
+                viewer_container.clear()
+                status_response = await api_get(f"/api/books/{book_id}/file-status", params={"user_id": user["id"]})
+
+                with viewer_container:
+                    if status_response.status_code != 200:
+                        ui.label(detail_from(status_response, "Не удалось проверить файл книги.")).classes(
+                            "text-red-700 font-bold"
+                        )
+                        return
+
+                    file_status = safe_json(status_response)
+                    if not file_status.get("available"):
+                        with ui.column().classes(
+                            "w-full min-h-96 items-center justify-center gap-3 bg-slate-50 border border-dashed border-slate-300 rounded-lg p-8"
+                        ):
+                            ui.icon("cloud_off").classes("text-6xl text-slate-400")
+                            ui.label("Файл книги недоступен").classes("text-2xl font-bold text-slate-800")
+                            ui.label(file_status.get("reason") or "Файл не найден на сервере.").classes(
+                                "text-center text-slate-600 max-w-2xl"
+                            )
+                            ui.label("Для проверки загрузи эту книгу заново через автора или модератора.").classes(
+                                "text-sm text-slate-500"
+                            )
+                        return
+
+                    ui.html(
+                        f"""
+                        <iframe
+                            src="{file_url(page)}"
+                            style="width:100%; height:78vh; border:0; border-radius:8px; background:white;"
+                        ></iframe>
+                        """
+                    ).classes("w-full rounded-lg border border-slate-200 shadow-sm bg-white")
+
+            ui.timer(0.1, render_viewer, once=True)
+
+        bookmarks_container = ui.column().classes("w-full gap-3")
+
+        async def load_reader_bookmarks():
+            bookmarks_container.clear()
+            response = await api_get(f"/api/books/users/{user['id']}/bookmarks", params={"book_id": book_id})
+            bookmarks = safe_json(response) if response.status_code == 200 else []
+            with bookmarks_container:
+                ui.label("Закладки этой книги").classes("text-xl font-bold")
+                if not bookmarks:
+                    ui.label("Для этой книги закладок пока нет.").classes("text-slate-500")
+                    return
+                for bookmark in bookmarks:
+                    page = bookmark.get("page_number") or 1
+                    with ui.card().classes("w-full p-3 rounded-lg border border-slate-200 shadow-sm"):
+                        with ui.row().classes("w-full items-center justify-between gap-3"):
+                            with ui.column().classes("gap-0"):
+                                ui.label(f"Страница {page}").classes("font-bold")
+                                ui.label(bookmark.get("note") or bookmark.get("position_label") or "").classes(
+                                    "text-sm text-slate-600"
+                                )
+
+                            async def delete_bookmark(bookmark_id=bookmark["id"]):
+                                response = await api_delete(
+                                    f"/api/books/bookmarks/{bookmark_id}",
+                                    params={"user_id": user["id"]},
+                                )
+                                if response.status_code == 200:
+                                    ui.notify("Закладка удалена", type="positive")
+                                    await load_reader_bookmarks()
+                                else:
+                                    ui.notify(detail_from(response, "Не удалось удалить закладку"), type="negative")
+
+                            async def open_bookmark(bookmark_page=page):
+                                page_input.value = bookmark_page
+                                await render_viewer()
+
+                            with ui.row().classes("gap-2"):
+                                ui.button("Перейти", icon="near_me", on_click=open_bookmark).classes(
+                                    "bg-blue-700 text-white"
+                                )
+                                ui.button(icon="delete", on_click=delete_bookmark).props("round").classes(
+                                    "bg-red-600 text-white"
+                                )
+
+        ui.timer(0.2, load_reader_bookmarks, once=True)
 
 
 @ui.page("/author")
@@ -591,7 +757,16 @@ def moderator_page():
                                 ui.label(f"Автор: {book.get('author_name') or 'не указан'} · Файл: {book.get('original_filename') or 'нет'}").classes(
                                     "text-sm text-slate-500"
                                 )
-                                ui.label(book.get("description") or "").classes("text-sm text-slate-700")
+                                with ui.card().classes("w-full p-3 rounded-lg bg-slate-50 border border-slate-200 shadow-none"):
+                                    ui.label("Описание книги").classes("text-sm font-bold text-slate-700")
+                                    ui.label(book.get("description") or "Автор не добавил описание.").classes("text-sm text-slate-700")
+                                preview_url = (
+                                    f"{BROWSER_API_BASE}/api/books/moderation/{book['id']}/file"
+                                    f"?moderator_user_id={quote(user['id'])}"
+                                )
+                                ui.button("Открыть файл", icon="visibility", on_click=lambda url=preview_url: ui.open(url)).classes(
+                                    "bg-blue-700 text-white"
+                                )
                                 comment_input = ui.input("Комментарий").classes("w-full")
 
                                 with ui.row().classes("gap-2"):
